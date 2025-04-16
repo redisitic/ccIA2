@@ -224,7 +224,7 @@ http://localhost:3000/store
 
 ```bash
 
-curl http://localhost:3000/retrieve/test.pdf --output out.pdf
+curl http://localhost:3000/retrieve/test.pdf --output test.pdf
 
 ```
 
