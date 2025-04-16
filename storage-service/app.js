@@ -1,4 +1,5 @@
 import express from 'express'
+import cors from 'cors'
 import multer from 'multer'
 import fs from 'fs'
 import path from 'path'
@@ -6,15 +7,19 @@ import crypto from 'crypto'
 import { create } from 'ipfs-http-client'
 import axios from 'axios'
 import { fileURLToPath } from 'url'
+import { storeOnChain } from './blockchain.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
 const app = express()
+app.use(cors())
+app.use(express.urlencoded({ extended: true }))
+app.use(express.json())
+
 const PORT = 3000
 const IPFS_ENABLED = false
 const METADATA_SERVICE_URL = process.env.METADATA_SERVICE_URL || 'http://localhost:4000/metadata'
-
 const LOCAL_UPLOAD_DIR = path.join(__dirname, 'uploads')
 if (!fs.existsSync(LOCAL_UPLOAD_DIR)) {
   fs.mkdirSync(LOCAL_UPLOAD_DIR)
@@ -32,6 +37,18 @@ function encryptBuffer(buffer) {
   const encryptedData = Buffer.concat([cipher.update(buffer), cipher.final()])
   return { iv, encryptedData }
 }
+function decryptBuffer(encryptedBuffer, iv) {
+  const decipher = crypto.createDecipheriv('aes-256-cbc', ENCRYPTION_KEY, iv)
+  return Buffer.concat([decipher.update(encryptedBuffer), decipher.final()])
+}
+function levelPriority(level) {
+  switch (level) {
+    case 'Always': return 3
+    case 'Usually': return 2
+    case 'Sometimes': return 1
+    default: return 0
+  }
+}
 
 const upload = multer({ storage: multer.memoryStorage() })
 
@@ -40,51 +57,88 @@ app.post('/store', upload.single('file'), async (req, res) => {
     if (!req.file) {
       return res.status(400).json({ error: 'No file uploaded' })
     }
+    const { attention, confidence, label, accessRights } = req.body
     const { iv, encryptedData } = encryptBuffer(req.file.buffer)
+    const fileId = req.file.originalname
 
     if (IPFS_ENABLED && ipfs) {
       const { cid } = await ipfs.add(encryptedData)
       const { cid: ivCid } = await ipfs.add(iv)
-      const fileId = cid.toString()
-      const dataLocation = fileId
-
-      // Notify Metadata Service
+      const dataLocation = cid.toString()
       await axios.post(METADATA_SERVICE_URL, {
         fileId,
         dataLocation,
-        accessRights: 'public',
-        attention: 'Always',
-        confidence: 'Usually'
+        accessRights: accessRights || 'public',
+        attention: attention || 'Always',
+        confidence: confidence || 'Usually',
+        label: label || ''
       })
+      await storeOnChain(fileId, 'v1.0', dataLocation)
 
       return res.json({
         success: true,
-        message: 'File stored on IPFS',
-        dataCid: fileId,
+        message: 'File stored on IPFS + chain + metadata DB',
+        dataCid: dataLocation,
         ivCid: ivCid.toString()
       })
     } else {
-      const fileId = req.file.originalname
       const encryptedPath = path.join(LOCAL_UPLOAD_DIR, fileId + '.enc')
       const ivPath = path.join(LOCAL_UPLOAD_DIR, fileId + '.iv')
       fs.writeFileSync(encryptedPath, encryptedData)
       fs.writeFileSync(ivPath, iv)
-
-      // Notify Metadata Service
       await axios.post(METADATA_SERVICE_URL, {
         fileId,
         dataLocation: encryptedPath,
-        accessRights: 'private',
-        attention: 'Always',
-        confidence: 'Usually'
+        accessRights: accessRights || 'private',
+        attention: attention || 'Always',
+        confidence: confidence || 'Usually',
+        label: label || ''
       })
+      await storeOnChain(fileId, 'v1.0', encryptedPath)
 
       return res.json({
         success: true,
-        message: 'File encrypted & stored locally',
+        message: 'File encrypted & stored locally + chain + metadata DB',
         encryptedFile: fileId + '.enc',
         ivFile: fileId + '.iv'
       })
+    }
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.get('/retrieve/:fileId', async (req, res) => {
+  try {
+    const { fileId } = req.params
+    const { data: metadata } = await axios.get(`${METADATA_SERVICE_URL}/${fileId}`)
+    if (!metadata) {
+      return res.status(404).json({ error: 'Metadata not found' })
+    }
+
+    const { dataLocation, attention, confidence } = metadata
+    if (levelPriority(attention) < levelPriority(confidence)) {
+      return res.status(403).json({ error: 'Retrieval not allowed' })
+    }
+
+    if (IPFS_ENABLED && ipfs) {
+      const encryptedDataChunks = []
+      for await (const chunk of ipfs.cat(dataLocation)) {
+        encryptedDataChunks.push(chunk)
+      }
+      return res.status(501).json({ error: 'IPFS retrieval with IV not fully implemented' })
+    } else {
+      const encPath = dataLocation
+      const ivPath = encPath.replace('.enc', '.iv')
+      if (!fs.existsSync(encPath) || !fs.existsSync(ivPath)) {
+        return res.status(404).json({ error: 'Encrypted file or IV not found' })
+      }
+      const encryptedFile = fs.readFileSync(encPath)
+      const iv = fs.readFileSync(ivPath)
+      const decryptedData = decryptBuffer(encryptedFile, iv)
+      res.setHeader('Content-Disposition', 'attachment; filename="output"')
+      return res.send(decryptedData)
     }
   } catch (err) {
     console.error(err)

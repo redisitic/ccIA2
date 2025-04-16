@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.20;
 
 contract FileRegistry {
     struct File {
@@ -9,25 +9,36 @@ contract FileRegistry {
         address owner;
     }
 
-    mapping(string => File) private files;  // Use a key like file ID or encrypted filename
+    mapping(string => File) private files;
 
-    event FileStored(string fileKey, string version, uint256 timestamp, string hash, address indexed owner);
+    event FileStored(string fileId, string version, uint256 timestamp, string fileHash, address indexed owner);
 
-    function storeFile(string memory fileKey, string memory version, string memory hash) public {
-        require(bytes(files[fileKey].hash).length == 0, "File already exists");
-
-        files[fileKey] = File({
+    function storeFile(
+        string calldata fileId,
+        string calldata version,
+        string calldata fileHash
+    ) external {
+        require(bytes(files[fileId].hash).length == 0, "File already exists");
+        files[fileId] = File({
             version: version,
             timestamp: block.timestamp,
-            hash: hash,
+            hash: fileHash,
             owner: msg.sender
         });
-
-        emit FileStored(fileKey, version, block.timestamp, hash, msg.sender);
+        emit FileStored(fileId, version, block.timestamp, fileHash, msg.sender);
     }
 
-    function getFile(string memory fileKey) public view returns (string memory version, uint256 timestamp, string memory hash, address owner) {
-        File memory f = files[fileKey];
+    function getFile(string calldata fileId)
+        external
+        view
+        returns (
+            string memory version,
+            uint256 timestamp,
+            string memory fileHash,
+            address owner
+        )
+    {
+        File memory f = files[fileId];
         return (f.version, f.timestamp, f.hash, f.owner);
     }
 }

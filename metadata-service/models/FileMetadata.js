@@ -2,10 +2,11 @@ import mongoose from 'mongoose'
 
 const FileMetadataSchema = new mongoose.Schema({
   fileId: { type: String, required: true, unique: true },
-  accessRights: { type: String, default: 'public' },
   dataLocation: { type: String, required: true },
-  attention: { type: String, default: 'None' },
-  confidence: { type: String, default: 'None' },
+  accessRights: { type: String, default: 'private' },
+  attention: { type: String, default: '' },
+  confidence: { type: String, default: '' },
+  label: { type: String, default: '' },
   createdAt: { type: Date, default: Date.now }
 })
 
